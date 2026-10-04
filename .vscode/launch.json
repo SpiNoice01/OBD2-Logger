@@ -1,0 +1,29 @@
+{
+    // Flutter debug & attach configurations
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Flutter: Launch (debug)",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart"
+        },
+        {
+            "name": "Flutter: Attach to running app",
+            "type": "dart",
+            "request": "attach"
+        },
+        {
+            "name": "Flutter: Run Chrome",
+            "type": "dart",
+            "request": "launch",
+            "args": ["-d", "chrome"]
+        },
+        {
+            "name": "Flutter: Run Windows",
+            "type": "dart",
+            "request": "launch",
+            "args": ["-d", "windows"]
+        }
+    ]
+}

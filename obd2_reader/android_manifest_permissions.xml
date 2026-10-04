@@ -1,0 +1,23 @@
+<!--
+  Tempel blok <uses-permission> di bawah ini ke dalam
+  android/app/src/main/AndroidManifest.xml, tepat SEBELUM tag <application>.
+
+  Kenapa ada dua set izin (BLUETOOTH_CONNECT baru & BLUETOOTH lama):
+  - Android 12+ (API 31+) pakai izin runtime granular BLUETOOTH_CONNECT/BLUETOOTH_SCAN.
+    Tag "neverForLocation" dipakai karena app ini TIDAK memakai hasil scan BLE
+    untuk menentukan lokasi pengguna, jadi tidak perlu minta izin lokasi di Android 12+.
+  - Android 11 ke bawah masih pakai izin BLUETOOTH/BLUETOOTH_ADMIN klasik, dan
+    scan Bluetooth di versi ini secara historis mensyaratkan izin lokasi.
+-->
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+    android:usesPermissionFlags="neverForLocation" />
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="28" />
+
+<!-- Opsional tapi disarankan: menandai app ini butuh hardware Bluetooth,
+     tapi tidak mewajibkannya supaya app tetap bisa terpasang di semua device. -->
+<uses-feature android:name="android.hardware.bluetooth" android:required="false" />

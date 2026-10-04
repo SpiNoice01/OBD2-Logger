@@ -1,0 +1,36 @@
+name: obd2_reader
+description: Aplikasi pembaca data OBD2 lewat Bluetooth Classic (ELM327 SPP).
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Koneksi Bluetooth Classic (SPP/RFCOMM) ke dongle ELM327.
+  flutter_blue_classic: ^0.1.1
+
+  # State management sederhana untuk status koneksi & data live.
+  provider: ^6.1.2
+
+  # Izin runtime BLUETOOTH_CONNECT/BLUETOOTH_SCAN (Android 12+).
+  permission_handler: ^11.3.1
+
+  # Lokasi penyimpanan file export (JSON/CSV).
+  path_provider: ^2.1.4
+
+  # Share sheet untuk mengirim file export keluar aplikasi.
+  share_plus: ^10.1.2
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
