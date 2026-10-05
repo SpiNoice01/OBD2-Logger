@@ -7,6 +7,7 @@ import '../services/data_exporter.dart';
 import 'raw_terminal_screen.dart';
 import 'session_list_screen.dart';
 import 'gear_tester_screen.dart';
+import 'mode22_scanner_screen.dart';
 import 'can_monitor_screen.dart';
 
 /// Layar utama: menampilkan nilai terbaru tiap PID yang berhasil didekode,
@@ -173,6 +174,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onPressed: () async {
                   await Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const GearTesterScreen()),
+                  );
+                },
+              ),
+              IconButton(
+                tooltip: 'Mode 22 Scanner (cari gear)',
+                icon: const Icon(Icons.manage_search),
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const Mode22ScannerScreen()),
                   );
                 },
               ),

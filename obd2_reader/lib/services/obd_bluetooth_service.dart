@@ -105,6 +105,46 @@ class ObdBluetoothService {
   Future<String> setHeader(String header) =>
       sendCommand('ATSH$header', timeout: const Duration(seconds: 3));
 
+  /// Protokol OBD yang dipilih ELM327 (hasil ATDPN), mis. 6 = CAN 11-bit
+  /// 500k, 7 = CAN 29-bit 500k. null kalau belum diketahui. Diisi oleh
+  /// [detectProtocol].
+  int? protocol;
+
+  bool get isCan29Bit => protocol == 7 || protocol == 9;
+
+  /// Tanya ELM327 protokol yang sedang aktif. Harus dipanggil setelah ada
+  /// komunikasi OBD yang sukses (ATSP0 baru memilih protokol saat request
+  /// pertama), mis. sesudah [discoverSupportedPids].
+  Future<int?> detectProtocol() async {
+    try {
+      final resp = await sendCommand('ATDPN');
+      final m = RegExp(r'A?([0-9A-C])').firstMatch(resp.trim().toUpperCase());
+      protocol = m == null ? null : int.parse(m.group(1)!, radix: 16);
+    } catch (_) {
+      protocol = null;
+    }
+    return protocol;
+  }
+
+  /// Arahkan request berikutnya ke ECU tertentu (physical addressing).
+  /// [header] 3 digit untuk CAN 11-bit (mis. '7E0') atau 8 digit untuk CAN
+  /// 29-bit (mis. '18DA10F1'). Versi 8 digit dikirim sebagai ATCP + ATSH
+  /// 6 digit supaya jalan juga di klon ELM327 lama.
+  Future<void> setEcuHeader(String header) async {
+    final h = header.toUpperCase();
+    if (h.length == 8) {
+      await sendCommand('ATCP${h.substring(0, 2)}');
+      await sendCommand('ATSH${h.substring(2)}');
+    } else {
+      await sendCommand('ATSH$h');
+    }
+  }
+
+  /// Kembalikan header ke alamat broadcast OBD standar supaya request
+  /// Mode 01 biasa jalan lagi tanpa perlu ATZ (yang lambat).
+  Future<void> restoreDefaultHeader() =>
+      setEcuHeader(isCan29Bit ? '18DB33F1' : '7DF');
+
   /// Reset header and re-run a short initialize sequence.
   Future<void> resetHeaderAndInitialize() async {
     try {

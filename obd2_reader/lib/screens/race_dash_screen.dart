@@ -29,7 +29,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
   // null = belum ada data (ditampilkan sebagai "--").
   int _rpm = 0;
   int? _speed;
-  int? _gear;
+  String? _gear; // label gear, mis. "3", "3M", "N"
   // Nilai terbaru per PID (kunci seperti '05', '0F'), dipakai gauge bawah.
   final Map<String, double> _pidValues = {};
 
@@ -220,7 +220,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
         _pidValues.addAll(frame.pids);
         _rpm = frame.pids['0C']?.toInt() ?? 0;
         _speed = frame.pids['0D']?.toInt();
-        _gear = frame.gear;
+        _gear = frame.gear?.toString();
         _updateShiftLight();
       });
     }));
@@ -369,26 +369,33 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     );
   }
 
+  /// GEAR tampil kalau ada sumber gear (simulator, gear ECU Mode 22, atau
+  /// estimasi RPM÷speed yang sudah terkalibrasi). Kalau tidak ada, kotak
+  /// GEAR disembunyikan dan speed jadi angka utama yang besar.
+  bool get _showGear => _simRunning || _controller.gearAvailable;
+
   Widget _buildCenterHero() {
+    final showGear = _showGear;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         // Gear
-        Container(
-          padding: const EdgeInsets.all(8),
-          child: Column(
-            children: [
-              Text('GEAR', style: TextStyle(color: _p.label)),
-              const SizedBox(height: 8),
-              Text(_gear?.toString() ?? '-',
-                  style: TextStyle(
-                      color: _p.valueColor,
-                      fontSize: 96,
-                      fontWeight: FontWeight.w700)),
-            ],
+        if (showGear)
+          Container(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              children: [
+                Text('GEAR', style: TextStyle(color: _p.label)),
+                const SizedBox(height: 8),
+                Text(_gear?.toString() ?? '-',
+                    style: TextStyle(
+                        color: _p.valueColor,
+                        fontSize: 96,
+                        fontWeight: FontWeight.w700)),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(width: 40),
+        if (showGear) const SizedBox(width: 40),
         // Speed
         Column(
           children: [
@@ -397,8 +404,8 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
             Text(_speed?.toString() ?? '--',
                 style: TextStyle(
                     color: _p.valueColor,
-                    fontSize: 48,
-                    fontWeight: FontWeight.w600)),
+                    fontSize: showGear ? 48 : 96,
+                    fontWeight: showGear ? FontWeight.w600 : FontWeight.w700)),
           ],
         )
       ],
