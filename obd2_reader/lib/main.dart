@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'controllers/obd_controller.dart';
 import 'controllers/mock_obd_controller.dart';
@@ -9,6 +10,10 @@ import 'controllers/theme_controller.dart';
 import 'screens/device_list_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Layar tetap menyala selama app terbuka di foreground (seperti saat
+  // menonton video). OS otomatis melepasnya saat app ke background.
+  WakelockPlus.enable();
   runApp(const Obd2ReaderApp());
 }
 

@@ -39,6 +39,10 @@ class ObdController extends ChangeNotifier {
   final Map<String, ObdSample> latestByPid = {};
   final List<ObdSample> log = [];
 
+  /// Optional gear detection value. UI can read this; logic to populate
+  /// it can be added later when a working Mode 22 candidate is confirmed.
+  int? get currentGear => null;
+
   bool _pollingActive = false;
   // Nomor generasi loop polling. Setiap kali start/stop dipanggil, nomor ini
   // berubah, supaya loop lama yang mungkin masih "nyangkut" di tengah await

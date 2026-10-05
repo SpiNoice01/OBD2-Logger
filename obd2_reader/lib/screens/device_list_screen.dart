@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../controllers/obd_controller.dart';
 import '../controllers/theme_controller.dart';
 import 'dashboard_screen.dart';
+import 'race_dash_screen.dart';
 import 'session_list_screen.dart';
 
 /// Layar awal: minta izin Bluetooth runtime, lalu tampilkan daftar
@@ -76,6 +77,14 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       appBar: AppBar(
         title: const Text('Pilih Dongle OBD2'),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const RaceDashScreen()));
+            },
+            icon: const Icon(Icons.speed),
+            tooltip: 'Buka Race Dash (simulasi)',
+          ),
           // Start/stop recording session manually from homepage.
           Consumer<ObdController>(builder: (context, controller, _) {
             final recording = controller.isSessionRecording;

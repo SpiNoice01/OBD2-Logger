@@ -24,8 +24,11 @@ dependencies:
 
   # Share sheet untuk mengirim file export keluar aplikasi.
   share_plus: ^10.1.2
+  shared_preferences: ^2.1.0
 
   cupertino_icons: ^1.0.8
+  audioplayers: ^6.7.1
+  wakelock_plus: ^1.5.2
 
 dev_dependencies:
   flutter_test:
