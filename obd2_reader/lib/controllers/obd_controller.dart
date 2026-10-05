@@ -112,56 +112,113 @@ class ObdController extends ChangeNotifier {
     }
   }
 
+  // Prioritas polling. Satu request ke ELM327 butuh ~150-200 ms, jadi kalau
+  // semua PID digilir rata, RPM hanya terbaru ~2 detik sekali (terlalu lambat
+  // untuk shift light). Pola slot sekarang:
+  //   RPM, speed, RPM, PID lain, RPM, speed, RPM, PID lain, ...
+  // -> RPM ~3x/detik, speed ~1.5x/detik, PID lain (suhu, voltase, dll)
+  //    bergiliran di slot sisanya.
+  static const String _fastPid = '0C'; // RPM
+  static const String _mediumPid = '0D'; // speed
+  // PID yang nilainya hampir tidak berubah: cukup dibaca sesekali.
+  static const Set<String> _rarePids = {'21', '33'};
+  static const Duration _rarePollInterval = Duration(seconds: 30);
+
   Future<void> _pollLoop(int generation) async {
-    while (_pollingActive && generation == _pollGeneration) {
-      final pids = supportedPids.toList()..sort();
-      for (final pid in pids) {
-        if (!_pollingActive || generation != _pollGeneration) break;
-        final def = findPidDef(pid);
-        if (def == null) continue; // Belum ada rumus decode untuk PID ini.
+    bool alive() => _pollingActive && generation == _pollGeneration;
 
-        try {
-          final response = await _service.sendCommand(
-            '01$pid',
-            timeout: const Duration(seconds: 2),
-          );
-          final bytes = ObdParser.extractDataBytes(
-            response,
-            expectedMode: '41',
-            expectedPid: pid,
-          );
+    final slowQueue = <String>[];
+    DateTime? lastRarePoll;
+    var slot = 0;
 
-          final sample = ObdSample(
-            timestamp: DateTime.now(),
-            pid: pid,
-            name: def.name,
-            rawHex: bytes != null
-                ? bytes
-                    .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                    .join(' ')
-                : response.trim(),
-            decodedValue: (bytes != null && bytes.length >= def.expectedBytes)
-                ? def.decode(bytes)
-                : null,
-            unit: def.unit,
-          );
+    while (alive()) {
+      final hasRpm = supportedPids.contains(_fastPid);
+      final hasSpeed = supportedPids.contains(_mediumPid);
 
-          latestByPid[pid] = sample;
-          log.add(sample);
-          // Append sample to session CSV if enabled (fire-and-forget).
-          if (_sessionFile != null) {
-            unawaited(DataExporter.appendSample(_sessionFile!, sample));
-          }
-          if (log.length > _maxLogEntries) {
-            log.removeRange(0, log.length - _maxLogEntries);
-          }
-          notifyListeners();
-        } catch (_) {
-          // Satu PID gagal/timeout dilewati saja, lanjut ke PID berikutnya
-          // supaya satu ECU yang lambat tidak macetkan seluruh polling.
+      String? pid;
+      if (hasRpm && slot.isEven) {
+        pid = _fastPid;
+      } else if (hasSpeed && slot % 4 == 1) {
+        pid = _mediumPid;
+      } else {
+        if (slowQueue.isEmpty) {
+          // Satu putaran PID lambat selesai: susun ulang antreannya.
+          final now = DateTime.now();
+          final rareDue = lastRarePoll == null ||
+              now.difference(lastRarePoll) >= _rarePollInterval;
+          if (rareDue) lastRarePoll = now;
+          slowQueue.addAll(supportedPids
+              .where((p) =>
+                  p != _fastPid &&
+                  p != _mediumPid &&
+                  (rareDue || !_rarePids.contains(p)) &&
+                  findPidDef(p) != null)
+              .toList()
+            ..sort());
         }
+        if (slowQueue.isNotEmpty) pid = slowQueue.removeAt(0);
       }
-      await Future.delayed(const Duration(milliseconds: 150));
+      slot++;
+
+      if (pid == null) {
+        // Tidak ada PID untuk slot ini. Kalau memang tidak ada PID sama
+        // sekali, beri jeda supaya loop tidak berputar tanpa henti.
+        if (!hasRpm && !hasSpeed) {
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
+        continue;
+      }
+
+      final ok = await _pollPid(pid);
+      // Jeda singkat setelah gagal (mis. koneksi putus) supaya tidak spin.
+      if (!ok) await Future.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  /// Minta satu PID Mode 01, simpan hasilnya. Return false kalau gagal/timeout.
+  Future<bool> _pollPid(String pid) async {
+    final def = findPidDef(pid);
+    if (def == null) return true; // Belum ada rumus decode untuk PID ini.
+
+    try {
+      final response = await _service.sendCommand(
+        '01$pid',
+        timeout: const Duration(seconds: 2),
+      );
+      final bytes = ObdParser.extractDataBytes(
+        response,
+        expectedMode: '41',
+        expectedPid: pid,
+      );
+
+      final sample = ObdSample(
+        timestamp: DateTime.now(),
+        pid: pid,
+        name: def.name,
+        rawHex: bytes != null
+            ? bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')
+            : response.trim(),
+        decodedValue: (bytes != null && bytes.length >= def.expectedBytes)
+            ? def.decode(bytes)
+            : null,
+        unit: def.unit,
+      );
+
+      latestByPid[pid] = sample;
+      log.add(sample);
+      // Append sample to session CSV if enabled (fire-and-forget).
+      if (_sessionFile != null) {
+        unawaited(DataExporter.appendSample(_sessionFile!, sample));
+      }
+      if (log.length > _maxLogEntries) {
+        log.removeRange(0, log.length - _maxLogEntries);
+      }
+      notifyListeners();
+      return true;
+    } catch (_) {
+      // Satu PID gagal/timeout dilewati saja, lanjut ke PID berikutnya
+      // supaya satu ECU yang lambat tidak macetkan seluruh polling.
+      return false;
     }
   }
 

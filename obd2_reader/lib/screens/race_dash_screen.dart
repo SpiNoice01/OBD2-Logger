@@ -30,9 +30,12 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
   int _rpm = 0;
   int? _speed;
   int? _gear;
-  double? _temp;
-  double? _load;
-  double? _batt;
+  // Nilai terbaru per PID (kunci seperti '05', '0F'), dipakai gauge bawah.
+  final Map<String, double> _pidValues = {};
+
+  // Gauge yang tampil di 3 kotak bawah (id dari _kGauges), bisa diganti
+  // dengan tap kotaknya.
+  List<String> _gaugeSlots = List.of(_kDefaultGaugeSlots);
 
   // Titik shift light (default 6500 rpm). Juga dipakai sebagai redline untuk
   // shift LED dan zona merah RPM bar.
@@ -45,8 +48,8 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
   bool _shiftFlashOn = false;
   bool _beepEnabled = true;
 
-  // Tema warna dash: gelap (default) atau LCD biru muda ala Haltech.
-  bool _lcdTheme = false;
+  // Tema warna dash (Gelap, LCD, Navy), digilir lewat tombol tema.
+  int _themeIndex = 0; // index ke _DashPalette.all
 
   // Lampu shift lingkaran besar di kanan bisa disembunyikan. Beep tetap
   // diatur terpisah lewat tombol volume.
@@ -57,7 +60,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
   static const Duration _appBarHideDelay = Duration(seconds: 4);
   bool _appBarVisible = true;
   Timer? _appBarHideTimer;
-  _DashPalette get _p => _lcdTheme ? _DashPalette.lcd : _DashPalette.dark;
+  _DashPalette get _p => _DashPalette.all[_themeIndex];
 
   @override
   void initState() {
@@ -67,6 +70,10 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+    // Fullscreen: sembunyikan status bar & tombol navigasi Android
+    // (home/back/recent). Swipe dari tepi layar untuk memunculkannya
+    // sementara, lalu otomatis hilang lagi.
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _loadPreferences();
     unawaited(_beeper.init());
     _showAppBar(); // tampil sebentar saat dash dibuka, lalu auto-hide
@@ -83,9 +90,46 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     setState(() {
       _redline = sp.getInt('race_redline') ?? 6500;
       _beepEnabled = sp.getBool('race_beep') ?? true;
-      _lcdTheme = sp.getBool('race_lcd_theme') ?? false;
+      // 'race_lcd_theme' = setting lama (bool) sebelum ada lebih dari 2 tema.
+      final theme = sp.getInt('race_theme') ??
+          ((sp.getBool('race_lcd_theme') ?? false) ? 1 : 0);
+      _themeIndex = theme.clamp(0, _DashPalette.all.length - 1);
       _showShiftCircle = sp.getBool('race_shift_circle') ?? true;
+      final slots = sp.getStringList('race_gauge_slots');
+      if (slots != null &&
+          slots.length == _kDefaultGaugeSlots.length &&
+          slots.every(_kGauges.containsKey)) {
+        _gaugeSlots = slots;
+      }
     });
+  }
+
+  Future<void> _setGaugeSlot(int index, String gaugeId) async {
+    setState(() => _gaugeSlots[index] = gaugeId);
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList('race_gauge_slots', _gaugeSlots);
+  }
+
+  Future<void> _pickGauge(int index) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final g in _kGauges.values)
+              ListTile(
+                title: Text(g.label),
+                subtitle: Text(g.description),
+                trailing:
+                    g.id == _gaugeSlots[index] ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.of(ctx).pop(g.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) await _setGaugeSlot(index, picked);
   }
 
   /// Tampilkan AppBar dan (ulang) mulai hitung mundur auto-hide.
@@ -112,10 +156,12 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     await sp.setBool('race_shift_circle', value);
   }
 
-  Future<void> _setLcdTheme(bool value) async {
-    setState(() => _lcdTheme = value);
+  /// Ganti ke tema berikutnya (berputar) dan simpan pilihannya.
+  Future<void> _cycleTheme() async {
+    final next = (_themeIndex + 1) % _DashPalette.all.length;
+    setState(() => _themeIndex = next);
     final sp = await SharedPreferences.getInstance();
-    await sp.setBool('race_lcd_theme', value);
+    await sp.setInt('race_theme', next);
   }
 
   Future<void> _setBeepEnabled(bool value) async {
@@ -168,21 +214,16 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
 
   void _startSim() {
     _simRunning = true;
-    void listen<T>(Stream<T> stream, void Function(T v) apply) {
-      _simSubs.add(stream.listen((v) {
-        if (mounted) setState(() => apply(v));
-      }));
-    }
-
-    listen<int>(_sim.rpmStream, (v) {
-      _rpm = v;
-      _updateShiftLight();
-    });
-    listen<int>(_sim.speedStream, (v) => _speed = v);
-    listen<int?>(_sim.gearStream, (v) => _gear = v);
-    listen<double>(_sim.tempStream, (v) => _temp = v);
-    listen<double>(_sim.loadStream, (v) => _load = v);
-    listen<double>(_sim.battStream, (v) => _batt = v);
+    _simSubs.add(_sim.frames.listen((frame) {
+      if (!mounted) return;
+      setState(() {
+        _pidValues.addAll(frame.pids);
+        _rpm = frame.pids['0C']?.toInt() ?? 0;
+        _speed = frame.pids['0D']?.toInt();
+        _gear = frame.gear;
+        _updateShiftLight();
+      });
+    }));
     _sim.start();
   }
 
@@ -197,22 +238,21 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     _rpm = 0;
     _speed = null;
     _gear = null;
-    _temp = null;
-    _load = null;
-    _batt = null;
+    _pidValues.clear();
     _updateShiftLight();
   }
 
   void _pullFromController() {
-    final pids = _controller.latestByPid;
     setState(() {
-      final rpm = pids['0C']?.decodedValue;
+      // Sample yang gagal decode (null) tidak menimpa nilai terakhir.
+      for (final e in _controller.latestByPid.entries) {
+        final v = e.value.decodedValue;
+        if (v != null) _pidValues[e.key] = v;
+      }
+      final rpm = _pidValues['0C'];
       if (rpm != null) _rpm = rpm.toInt();
-      final spd = pids['0D']?.decodedValue;
+      final spd = _pidValues['0D'];
       if (spd != null) _speed = spd.toInt();
-      _temp = pids['05']?.decodedValue ?? _temp;
-      _load = pids['04']?.decodedValue ?? _load;
-      _batt = pids['42']?.decodedValue ?? _batt;
       _gear = _controller.currentGear;
       _updateShiftLight();
     });
@@ -226,6 +266,8 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     unawaited(_beeper.dispose());
     // Restore preferred orientations to allow normal device rotation.
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    // Kembalikan status bar & tombol navigasi untuk layar lain.
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     for (final s in _simSubs) {
       s.cancel();
     }
@@ -264,10 +306,17 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
         color = _p.ledGreen;
       }
       return Container(
-        width: 14,
-        height: 14,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        width: 20,
+        height: 20,
+        margin: const EdgeInsets.symmetric(horizontal: 7),
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          // Sedikit glow saat menyala supaya mirip LED asli.
+          boxShadow: on
+              ? [BoxShadow(color: color.withAlpha(150), blurRadius: 10)]
+              : null,
+        ),
       );
     });
 
@@ -278,7 +327,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
     return Column(
       children: [
         SizedBox(
-          height: 28,
+          height: 36,
           child:
               Row(mainAxisAlignment: MainAxisAlignment.center, children: leds),
         ),
@@ -303,7 +352,15 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
               const SizedBox(width: 8),
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
-                child: Text('RPM', style: TextStyle(color: _p.label)),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Angka skala RPM dalam ribuan (1 = 1000 rpm).
+                    Text('x1000',
+                        style: TextStyle(color: _p.label, fontSize: 10)),
+                    Text('RPM', style: TextStyle(color: _p.label)),
+                  ],
+                ),
               ),
             ],
           ),
@@ -325,7 +382,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
               const SizedBox(height: 8),
               Text(_gear?.toString() ?? '-',
                   style: TextStyle(
-                      color: _p.primary,
+                      color: _p.valueColor,
                       fontSize: 96,
                       fontWeight: FontWeight.w700)),
             ],
@@ -339,7 +396,7 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
             const SizedBox(height: 8),
             Text(_speed?.toString() ?? '--',
                 style: TextStyle(
-                    color: _p.primary,
+                    color: _p.valueColor,
                     fontSize: 48,
                     fontWeight: FontWeight.w600)),
           ],
@@ -382,31 +439,34 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
   }
 
   Widget _buildBottomGauges() {
-    Widget smallGauge(String label, String value, String unit) {
+    // Tap kotak gauge untuk memilih data yang ditampilkan.
+    Widget smallGauge(int index) {
+      final g = _kGauges[_gaugeSlots[index]]!;
+      final value = g.compute(_pidValues);
       return Expanded(
-        child: Column(
-          children: [
-            Text(label, style: TextStyle(color: _p.label)),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    color: _p.primary,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w500)),
-            const SizedBox(height: 4),
-            Text(unit, style: TextStyle(color: _p.unit, fontSize: 12)),
-          ],
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _pickGauge(index),
+          child: Column(
+            children: [
+              Text(g.label, style: TextStyle(color: _p.label)),
+              const SizedBox(height: 8),
+              Text(value?.toStringAsFixed(g.digits) ?? '--',
+                  style: TextStyle(
+                      color: _p.valueColor,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w500)),
+              const SizedBox(height: 4),
+              Text(g.unit, style: TextStyle(color: _p.unit, fontSize: 12)),
+            ],
+          ),
         ),
       );
     }
 
-    String fmt(double? v, int digits) => v?.toStringAsFixed(digits) ?? '--';
-
     return Row(
       children: [
-        smallGauge('TEMP', fmt(_temp, 0), '°C'),
-        smallGauge('LOAD', fmt(_load, 0), '%'),
-        smallGauge('BATT', fmt(_batt, 1), 'V'),
+        for (var i = 0; i < _gaugeSlots.length; i++) smallGauge(i),
       ],
     );
   }
@@ -456,9 +516,9 @@ class _RaceDashScreenState extends State<RaceDashScreen> {
           onPressed: () => _setShowShiftCircle(!_showShiftCircle),
         ),
         IconButton(
-          icon: Icon(_lcdTheme ? Icons.dark_mode : Icons.light_mode),
-          tooltip: _lcdTheme ? 'Tema gelap' : 'Tema LCD biru',
-          onPressed: () => _setLcdTheme(!_lcdTheme),
+          icon: const Icon(Icons.palette),
+          tooltip: 'Ganti tema (sekarang: ${_p.name})',
+          onPressed: _cycleTheme,
         ),
         IconButton(
           icon: Icon(_beepEnabled ? Icons.volume_up : Icons.volume_off),
@@ -596,7 +656,7 @@ class _RpmBarPainter extends CustomPainter {
 
   static const double _segWidth = 4;
   static const double _gap = 2;
-  static const double _labelHeight = 14;
+  static const double _labelHeight = 20; // underline + tick + angka
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -621,26 +681,35 @@ class _RpmBarPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(x, barHeight - h, segW, h), paint);
     }
 
+    // Garis bawah (underline) sepanjang bar; bagian zona redline merah.
+    final lineY = barHeight + 2;
+    final redX = (redline / maxRpm).clamp(0.0, 1.0) * size.width;
+    final linePaint = Paint()
+      ..strokeWidth = 2
+      ..color = palette.rpmUnderlineColor;
+    canvas.drawLine(Offset(0, lineY), Offset(redX, lineY), linePaint);
+    linePaint.color = palette.red;
+    canvas.drawLine(Offset(redX, lineY), Offset(size.width, lineY), linePaint);
+
     // Tick + label tiap 1000 rpm.
     final tickPaint = Paint()
-      ..color = palette.label
+      ..color = palette.rpmUnderlineColor
       ..strokeWidth = 1;
     for (var k = 0; k <= maxRpm ~/ 1000; k++) {
       final x = k * 1000 / maxRpm * size.width;
-      canvas.drawLine(
-          Offset(x, barHeight + 1), Offset(x, barHeight + 4), tickPaint);
+      canvas.drawLine(Offset(x, lineY), Offset(x, lineY + 4), tickPaint);
       final tp = TextPainter(
         text: TextSpan(
           text: '$k',
           style: TextStyle(
-            color: k * 1000 >= redline ? palette.red : palette.label,
+            color: k * 1000 >= redline ? palette.red : palette.rpmScaleColor,
             fontSize: 10,
           ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
       final lx = (x - tp.width / 2).clamp(0.0, size.width - tp.width);
-      tp.paint(canvas, Offset(lx, barHeight + 3));
+      tp.paint(canvas, Offset(lx, lineY + 4));
     }
   }
 
@@ -652,10 +721,10 @@ class _RpmBarPainter extends CustomPainter {
       old.palette != palette;
 }
 
-/// Set warna Race Dash. [dark] = latar gelap + cyan, [lcd] = latar biru muda
-/// + tulisan biru tua seperti layar LCD dash Haltech.
+/// Set warna Race Dash. Tombol tema di AppBar menggilir [all] berurutan.
 class _DashPalette {
   const _DashPalette({
+    required this.name,
     required this.background,
     required this.primary,
     required this.label,
@@ -668,8 +737,12 @@ class _DashPalette {
     required this.shiftOff,
     required this.shiftBorder,
     required this.shiftText,
+    this.rpmScale,
+    this.rpmUnderline,
+    this.value,
   });
 
+  final String name;
   final Color background;
   final Color primary; // angka utama & segmen RPM yang menyala
   final Color label; // label (GEAR, TEMP, ...) & angka skala RPM
@@ -682,8 +755,23 @@ class _DashPalette {
   final Color shiftOff;
   final Color shiftBorder;
   final Color shiftText;
+  // Warna angka skala RPM (0, 1, 2, ...). null = sama dengan [label].
+  final Color? rpmScale;
+  Color get rpmScaleColor => rpmScale ?? label;
+  // Warna underline & tick RPM (bagian non-redline). null = [label].
+  final Color? rpmUnderline;
+  Color get rpmUnderlineColor => rpmUnderline ?? label;
+  // Warna angka besar (gear, speed, nilai gauge). null = [primary].
+  final Color? value;
+  Color get valueColor => value ?? primary;
 
+  /// Urutan tema saat tombol tema ditekan. Index disimpan di preferences,
+  /// jadi tema baru sebaiknya ditambahkan di akhir.
+  static const List<_DashPalette> all = [dark, lcd, navy, black, s2000];
+
+  // Latar gelap + tulisan cyan.
   static const dark = _DashPalette(
+    name: 'Gelap',
     background: Color(0xFF021018),
     primary: Colors.cyanAccent,
     label: Color(0xFF18FFC8),
@@ -698,7 +786,9 @@ class _DashPalette {
     shiftText: Colors.white24,
   );
 
+  // Latar biru muda + tulisan biru tua seperti layar LCD dash Haltech.
   static const lcd = _DashPalette(
+    name: 'LCD',
     background: Color(0xFFA6E6F2),
     primary: Color(0xFF0B2A9E),
     label: Color(0xFF1A3DB8),
@@ -713,4 +803,149 @@ class _DashPalette {
     shiftBorder: Color(0xFF5E9CAD),
     shiftText: Color(0x660B2A9E),
   );
+
+  // Latar biru gelap yang agak cerah + angka cream, label abu-abu.
+  static const navy = _DashPalette(
+    name: 'Navy',
+    background: Color(0xFF1C3A63),
+    primary: Color(0xFFF3E6C8), // cream
+    label: Color(0xFFB8C4D1),
+    unit: Color(0xFF94A3B5),
+    segmentOff: Color(0x24FFFFFF),
+    red: Color(0xFFFF6B6B),
+    redOff: Color(0x40FF6B6B),
+    ledOff: Color(0xFF2E4C78),
+    ledGreen: Colors.greenAccent,
+    shiftOff: Color(0xFF263F63),
+    shiftBorder: Color(0xFF5B7499),
+    shiftText: Color(0x40FFFFFF),
+  );
+
+  // Latar hitam pekat + angka cream, label cream redup.
+  static const black = _DashPalette(
+    name: 'Hitam',
+    background: Color(0xFF000000),
+    primary: Color(0xFFF3E6C8), // cream
+    label: Color(0xFFBDB29A),
+    unit: Color(0xFF8F8775),
+    segmentOff: Color(0x1FF3E6C8),
+    red: Color(0xFFFF5252),
+    redOff: Color(0x40FF5252),
+    ledOff: Color(0xFF2A2A2A),
+    ledGreen: Colors.greenAccent,
+    shiftOff: Color(0xFF1A0A0A),
+    shiftBorder: Color(0xFF3A3A3A),
+    shiftText: Color(0x40F3E6C8),
+  );
+
+  // "S2000 theme": latar hitam + angka oranye hangat kemerahan, angka skala
+  // RPM putih. Nama yang tampil di app tetap "Hitam Oranye".
+  static const s2000 = _DashPalette(
+    name: 'Hitam Oranye',
+    background: Color(0xFF000000),
+    primary: Color(0xFFFF7F32), // oranye hangat kemerahan
+    label: Color(0xFFD96E38),
+    unit: Color(0xFFA8582E),
+    segmentOff: Color(0x1FFF7F32),
+    // Merah lebih tajam supaya zona merah beda dari angka oranye.
+    red: Color(0xFFFF2424),
+    redOff: Color(0x40FF2424),
+    ledOff: Color(0xFF2A2A2A),
+    ledGreen: Colors.greenAccent,
+    shiftOff: Color(0xFF1A0A0A),
+    shiftBorder: Color(0xFF3A3A3A),
+    shiftText: Color(0x40FF7F32),
+    // Angka skala RPM putih (yang di zona redline tetap merah).
+    rpmScale: Color(0xFFF5F5F5),
+    // Underline & tick RPM cream.
+    rpmUnderline: Color(0xFFF3E6C8),
+    // Angka gear, speed & 3 gauge bawah merah agak gelap, seperti layar
+    // LCD merah di dash S2000. Segmen RPM tetap oranye.
+    // Merah gelap redline RPM, digeser sedikit ke oranye & dicerahkan.
+    value: Color(0xFF6E2A12),
+  );
 }
+
+/// Pilihan data untuk kotak gauge bawah Race Dash. [compute] menerima nilai
+/// terbaru per PID Mode 01 dan mengembalikan null kalau datanya belum ada.
+class _GaugeDef {
+  const _GaugeDef({
+    required this.id,
+    required this.label,
+    required this.unit,
+    required this.digits,
+    required this.description,
+    required this.compute,
+  });
+
+  final String id;
+  final String label;
+  final String unit;
+  final int digits;
+  final String description;
+  final double? Function(Map<String, double> pids) compute;
+}
+
+double? _boostKpa(Map<String, double> pids) {
+  final map = pids['0B'];
+  if (map == null) return null;
+  // Tanpa PID baro, pakai tekanan udara standar permukaan laut.
+  return map - (pids['33'] ?? 101.3);
+}
+
+final Map<String, _GaugeDef> _kGauges = {
+  for (final g in [
+    _GaugeDef(
+      id: 'coolant',
+      label: 'TEMP',
+      unit: '°C',
+      digits: 0,
+      description: 'Suhu air radiator / coolant (PID 05)',
+      compute: (p) => p['05'],
+    ),
+    _GaugeDef(
+      id: 'iat',
+      label: 'IAT',
+      unit: '°C',
+      digits: 0,
+      description: 'Suhu udara masuk. Makin panas, tenaga makin turun (PID 0F)',
+      compute: (p) => p['0F'],
+    ),
+    const _GaugeDef(
+      id: 'boost',
+      label: 'BOOST',
+      unit: 'kPa',
+      digits: 0,
+      description: 'MAP - baro. Negatif = vakum (mesin NA), positif = boost '
+          'turbo (PID 0B & 33)',
+      compute: _boostKpa,
+    ),
+    _GaugeDef(
+      id: 'load',
+      label: 'LOAD',
+      unit: '%',
+      digits: 0,
+      description: 'Beban mesin terhitung ECU (PID 04)',
+      compute: (p) => p['04'],
+    ),
+    _GaugeDef(
+      id: 'throttle',
+      label: 'THR',
+      unit: '%',
+      digits: 0,
+      description: 'Bukaan katup throttle (PID 11)',
+      compute: (p) => p['11'],
+    ),
+    _GaugeDef(
+      id: 'batt',
+      label: 'BATT',
+      unit: 'V',
+      digits: 1,
+      description: 'Voltase aki / ECU (PID 42)',
+      compute: (p) => p['42'],
+    ),
+  ])
+    g.id: g,
+};
+
+const List<String> _kDefaultGaugeSlots = ['coolant', 'iat', 'batt'];
